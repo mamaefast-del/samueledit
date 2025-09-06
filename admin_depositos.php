@@ -22,8 +22,48 @@ try {
         observacoes TEXT,
         FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
     )");
+    
+    // Criar tabela de usuários se não existir
+    $pdo->exec("CREATE TABLE IF NOT EXISTS usuarios (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        nome VARCHAR(255) NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        senha VARCHAR(255) NOT NULL,
+        saldo DECIMAL(10,2) DEFAULT 0.00,
+        data_cadastro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        ultimo_login TIMESTAMP NULL,
+        status ENUM('ativo', 'inativo', 'banido') DEFAULT 'ativo'
+    )");
+    
+    // Criar tabela de jogos se não existir
+    $pdo->exec("CREATE TABLE IF NOT EXISTS jogos (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        nome VARCHAR(255) NOT NULL,
+        descricao TEXT,
+        imagem VARCHAR(500),
+        categoria VARCHAR(100),
+        provider VARCHAR(100),
+        status ENUM('ativo', 'inativo') DEFAULT 'ativo',
+        popularidade INT DEFAULT 0,
+        data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )");
+    
+    // Criar tabela de apostas se não existir
+    $pdo->exec("CREATE TABLE IF NOT EXISTS apostas (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        usuario_id INT NOT NULL,
+        jogo_id INT NOT NULL,
+        valor DECIMAL(10,2) NOT NULL,
+        multiplicador DECIMAL(8,2) DEFAULT 1.00,
+        ganho DECIMAL(10,2) DEFAULT 0.00,
+        status ENUM('pendente', 'ganhou', 'perdeu') DEFAULT 'pendente',
+        data_aposta TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (usuario_id) REFERENCES usuarios(id),
+        FOREIGN KEY (jogo_id) REFERENCES jogos(id)
+    )");
+    
 } catch (PDOException $e) {
-    // Tabela já existe ou erro na criação
+    error_log("Erro ao criar tabelas: " . $e->getMessage());
 }
 
 // Buscar depósitos
