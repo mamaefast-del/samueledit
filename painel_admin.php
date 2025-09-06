@@ -14,7 +14,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_stats') {
     
     try {
         // Criar tabelas se não existirem
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM usuarios WHERE data_cadastro >= DATE_SUB(NOW(), INTERVAL 30 DAY)");
+        $pdo->exec("CREATE TABLE IF NOT EXISTS usuarios (
             id INT AUTO_INCREMENT PRIMARY KEY,
             nome VARCHAR(100) NOT NULL,
             email VARCHAR(100) UNIQUE NOT NULL,
@@ -56,57 +56,24 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_stats') {
         $count_usuarios = $pdo->query("SELECT COUNT(*) FROM usuarios")->fetchColumn();
         if ($count_usuarios == 0) {
             $pdo->exec("INSERT INTO usuarios (nome, email, senha, saldo) VALUES 
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM historico_jogos WHERE data_jogo >= CURDATE()");
+                ('João Silva', 'joao@email.com', '" . password_hash('123456', PASSWORD_DEFAULT) . "', 150.00),
                 ('Maria Santos', 'maria@email.com', '" . password_hash('123456', PASSWORD_DEFAULT) . "', 200.00),
                 ('Pedro Costa', 'pedro@email.com', '" . password_hash('123456', PASSWORD_DEFAULT) . "', 75.50)");
         }
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM historico_jogos WHERE data_jogo >= DATE_SUB(NOW(), INTERVAL 30 DAY)");
+        
         $count_jogos = $pdo->query("SELECT COUNT(*) FROM jogos")->fetchColumn();
         if ($count_jogos == 0) {
             $pdo->exec("INSERT INTO jogos (nome, categoria, ativo) VALUES 
-        $stmt = $pdo->prepare("SELECT COALESCE(SUM(valor_apostado), 0) FROM historico_jogos WHERE data_jogo >= CURDATE()");
+                ('Aviator', 'Crash', 1),
                 ('Mines', 'Estratégia', 1),
                 ('Plinko', 'Arcade', 1),
                 ('Dice', 'Clássico', 1),
-        $stmt = $pdo->prepare("SELECT COALESCE(SUM(valor_apostado), 0) FROM historico_jogos WHERE data_jogo >= DATE_SUB(NOW(), INTERVAL 30 DAY)");
+                ('Blackjack', 'Cartas', 1)");
         }
         
         // Buscar estatísticas
-        // Estatísticas de depósitos (usando transacoes_pix)
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM transacoes_pix WHERE status = 'aprovado' AND criado_em >= CURDATE()");
-        $stmt->execute();
-        $depositos_hoje = $stmt->fetchColumn() ?: 0;
-        
-        $stmt = $pdo->prepare("SELECT COALESCE(SUM(valor), 0) FROM transacoes_pix WHERE status = 'aprovado' AND criado_em >= CURDATE()");
-        $stmt->execute();
-        $valor_depositado_hoje = $stmt->fetchColumn() ?: 0;
-        
-        // Top jogos (usando raspadinhas_config)
-        $stmt = $pdo->prepare("
-            SELECT rc.nome, COUNT(hj.id) as total_jogadas
-            FROM raspadinhas_config rc
-            LEFT JOIN historico_jogos hj ON rc.id = hj.raspadinha_id
-            WHERE hj.data_jogo >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-            GROUP BY rc.id, rc.nome
-            ORDER BY total_jogadas DESC
-            LIMIT 5
-        ");
-        $stmt->execute();
-        $top_jogos = $stmt->fetchAll();
-        
-        // Se não há dados, criar dados de exemplo
-        if (empty($top_jogos)) {
-            $top_jogos = [
-                ['nome' => 'FINAL DE SEMANA', 'total_jogadas' => $apostas_hoje],
-                ['nome' => 'SEU MANTO', 'total_jogadas' => max(0, $apostas_hoje - 5)],
-                ['nome' => 'PC GAMER', 'total_jogadas' => max(0, $apostas_hoje - 10)],
-                ['nome' => 'MEU CELULAR NOVO', 'total_jogadas' => max(0, $apostas_hoje - 15)],
-                ['nome' => 'MEU CARRO POPULAR', 'total_jogadas' => max(0, $apostas_hoje - 20)]
-            ];
-        }
-        
         $total_usuarios = $pdo->query("SELECT COUNT(*) FROM usuarios")->fetchColumn();
-        $stmt = $pdo->prepare("SELECT nome, email, data_cadastro FROM usuarios ORDER BY data_cadastro DESC LIMIT 5");
+        $novos_usuarios = $pdo->query("SELECT COUNT(*) FROM usuarios WHERE data_cadastro >= DATE_SUB(NOW(), INTERVAL 30 DAY)")->fetchColumn();
         $total_depositos = $pdo->query("SELECT COALESCE(SUM(valor), 0) FROM depositos WHERE status = 'aprovado'")->fetchColumn();
         $depositos_pendentes = $pdo->query("SELECT COUNT(*) FROM depositos WHERE status = 'pendente'")->fetchColumn();
         $total_apostas = $pdo->query("SELECT COALESCE(SUM(valor), 0) FROM apostas")->fetchColumn();
@@ -118,9 +85,6 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_stats') {
             'total_depositos' => (float)$total_depositos,
             'depositos_pendentes' => (int)$depositos_pendentes,
             'total_apostas' => (float)$total_apostas,
-            'depositos_hoje' => $depositos_hoje,
-            'valor_depositado_hoje' => number_format($valor_depositado_hoje, 2, ',', '.'),
-            'top_jogos' => $top_jogos,
             'apostas_hoje' => (int)$apostas_hoje
         ];
         
