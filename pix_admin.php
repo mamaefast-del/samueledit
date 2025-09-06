@@ -1,102 +1,75 @@
 <?php
 session_start();
+require 'db.php';
+date_default_timezone_set('America/Sao_Paulo');
+
+$mensagem = '';
 
 if (!isset($_SESSION['admin']) || $_SESSION['admin'] !== true) {
-    header('Location: login.php');
-    exit;
+  header('Location: login.php');
+  exit;
 }
 
-require 'db.php';
-
-// Buscar transações PIX
+// Filtro status (opcional)
 $status_filter = $_GET['status'] ?? '';
-$page = max(1, intval($_GET['page'] ?? 1));
-$limit = 20;
-$offset = ($page - 1) * $limit;
+$data_inicial = $_GET['data_inicial'] ?? '';
+$data_final = $_GET['data_final'] ?? '';
 
-$where = '';
+// Paginação simples
+$pagina = max(1, intval($_GET['pagina'] ?? 1));
+$limite = 20;
+$offset = ($pagina - 1) * $limite;
+
+// Query base
+// Filtra para listagem e estatísticas
+$where = [];
 $params = [];
 
-if ($status_filter) {
-    $where = "WHERE status = ?";
-    $params = [$status_filter];
+if ($status_filter && in_array($status_filter, ['pendente', 'aprovado', 'cancelado'])) {
+  $where[] = "status = ?";
+  $params[] = $status_filter;
 }
 
-try {
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM transacoes_pix $where");
-    $stmt->execute($params);
-    $total = $stmt->fetchColumn();
-    
-    $stmt = $pdo->prepare("
-        SELECT t.*, u.nome, u.email 
-        FROM transacoes_pix t 
-        LEFT JOIN usuarios u ON t.usuario_id = u.id 
-        $where 
-        ORDER BY t.data_transacao DESC 
-        LIMIT $limit OFFSET $offset
-    ");
-    $stmt->execute($params);
-    $transacoes = $stmt->fetchAll();
-} catch (PDOException $e) {
-    $transacoes = [];
-    $total = 0;
+if ($data_inicial) {
+  $where[] = "DATE(criado_em) >= ?";
+  $params[] = $data_inicial;
 }
 
-$total_pages = ceil($total / $limit);
-
-// Buscar estatísticas
-try {
-    $pendentes = $pdo->query("SELECT COUNT(*) FROM transacoes_pix WHERE status = 'pendente'")->fetchColumn();
-    $aprovadas = $pdo->query("SELECT COUNT(*) FROM transacoes_pix WHERE status = 'aprovado'")->fetchColumn();
-    $rejeitadas = $pdo->query("SELECT COUNT(*) FROM transacoes_pix WHERE status = 'rejeitado'")->fetchColumn();
-    $total_valor = $pdo->query("SELECT SUM(valor) FROM transacoes_pix WHERE status = 'aprovado'")->fetchColumn() ?: 0;
-    $valor_pendente = $pdo->query("SELECT SUM(valor) FROM transacoes_pix WHERE status = 'pendente'")->fetchColumn() ?: 0;
-    $hoje = $pdo->query("SELECT COUNT(*) FROM transacoes_pix WHERE DATE(data_transacao) = CURDATE()")->fetchColumn();
-} catch (PDOException $e) {
-    $pendentes = $aprovadas = $rejeitadas = $total_valor = $valor_pendente = $hoje = 0;
+if ($data_final) {
+  $where[] = "DATE(criado_em) <= ?";
+  $params[] = $data_final;
 }
 
-// Processar ações
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $action = $_POST['action'] ?? '';
-    $transacao_id = intval($_POST['transacao_id'] ?? 0);
-    
-    try {
-        switch ($action) {
-            case 'aprovar':
-                // Buscar dados da transação
-                $stmt = $pdo->prepare("SELECT * FROM transacoes_pix WHERE id = ?");
-                $stmt->execute([$transacao_id]);
-                $transacao = $stmt->fetch();
-                
-                if ($transacao && $transacao['status'] === 'pendente') {
-                    // Aprovar transação
-                    $stmt = $pdo->prepare("UPDATE transacoes_pix SET status = 'aprovado' WHERE id = ?");
-                    $stmt->execute([$transacao_id]);
-                    
-                    // Adicionar saldo ao usuário
-                    $stmt = $pdo->prepare("UPDATE usuarios SET saldo = saldo + ? WHERE id = ?");
-                    $stmt->execute([$transacao['valor'], $transacao['usuario_id']]);
-                    
-                    $_SESSION['success'] = 'Transação aprovada e saldo creditado!';
-                }
-                break;
-                
-            case 'rejeitar':
-                $stmt = $pdo->prepare("UPDATE transacoes_pix SET status = 'rejeitado' WHERE id = ?");
-                $stmt->execute([$transacao_id]);
-                $_SESSION['success'] = 'Transação rejeitada!';
-                break;
-        }
-    } catch (PDOException $e) {
-        $_SESSION['error'] = 'Erro ao processar ação: ' . $e->getMessage();
-    }
-    
-    header('Location: pix_admin.php');
-    exit;
+$where_sql = count($where) ? 'WHERE ' . implode(' AND ', $where) : '';
+
+// Paginação
+$stmtTotal = $pdo->prepare("SELECT COUNT(*) FROM transacoes_pix $where_sql");
+$stmtTotal->execute($params);
+$total = $stmtTotal->fetchColumn();
+
+$totalPaginas = ceil($total / $limite);
+
+$stmt = $pdo->prepare("SELECT * FROM transacoes_pix $where_sql ORDER BY criado_em DESC LIMIT $limite OFFSET $offset");
+$stmt->execute($params);
+$transacoes = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Estatísticas
+$stmtStats = $pdo->prepare("SELECT status, COUNT(*) as total FROM transacoes_pix $where_sql GROUP BY status");
+$stmtStats->execute($params);
+
+$stats = ['aprovado' => 0, 'pendente' => 0, 'cancelado' => 0];
+$totalGeral = 0;
+
+while ($row = $stmtStats->fetch(PDO::FETCH_ASSOC)) {
+  $status = strtolower($row['status']);
+  $stats[$status] = (int)$row['total'];
+  $totalGeral += (int)$row['total'];
 }
+
+// Calcular porcentagem de aprovação
+$percentualAprovado = $totalGeral > 0 ? round(($stats['aprovado'] / $totalGeral) * 100, 2) : 0;
+
 ?>
-
 <!DOCTYPE html>
 <html lang="pt-br">
 <head>
@@ -486,11 +459,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             color: #000;
         }
 
-        .stat-icon.pendente { background: linear-gradient(135deg, var(--warning-color), #f59e0b); }
+        .stat-icon.total { background: linear-gradient(135deg, var(--info-color), #2563eb); }
         .stat-icon.aprovado { background: linear-gradient(135deg, var(--success-color), #16a34a); }
-        .stat-icon.rejeitado { background: linear-gradient(135deg, var(--error-color), #dc2626); }
-        .stat-icon.valor { background: linear-gradient(135deg, var(--primary-green), #00b894); }
-        .stat-icon.hoje { background: linear-gradient(135deg, var(--purple-color), #7c3aed); }
+        .stat-icon.pendente { background: linear-gradient(135deg, var(--warning-color), #f59e0b); }
+        .stat-icon.cancelado { background: linear-gradient(135deg, var(--error-color), #dc2626); }
+        .stat-icon.taxa { background: linear-gradient(135deg, var(--purple-color), #7c3aed); }
 
         .stat-trend {
             display: flex;
@@ -544,16 +517,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             font-weight: 700;
         }
 
-        /* Filters */
-        .filters {
-            display: flex;
+        /* Forms */
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
             gap: 16px;
-            align-items: center;
-            flex-wrap: wrap;
             margin-bottom: 20px;
         }
 
-        .select-input {
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        label {
+            font-weight: 600;
+            color: var(--text-light);
+            font-size: 14px;
+        }
+
+        input, select {
             padding: 12px 16px;
             background: var(--bg-card);
             border: 1px solid var(--border-color);
@@ -563,10 +547,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             transition: var(--transition);
         }
 
-        .select-input:focus {
+        input:focus, select:focus {
             outline: none;
             border-color: var(--primary-green);
             box-shadow: 0 0 0 3px rgba(0, 212, 170, 0.1);
+        }
+
+        input:hover, select:hover {
+            border-color: var(--primary-green);
         }
 
         /* Buttons */
@@ -593,16 +581,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .btn-primary:hover {
             transform: translateY(-2px);
             box-shadow: 0 6px 20px rgba(0, 212, 170, 0.4);
-        }
-
-        .btn-success {
-            background: linear-gradient(135deg, var(--success-color), #16a34a);
-            color: white;
-        }
-
-        .btn-danger {
-            background: linear-gradient(135deg, var(--error-color), #dc2626);
-            color: white;
         }
 
         .btn-secondary {
@@ -675,31 +653,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             border-right: 1px solid var(--border-color);
         }
 
-        /* Status badges */
-        .status-badge {
-            padding: 4px 8px;
-            border-radius: 6px;
-            font-size: 10px;
+        /* Status Colors */
+        .status-aprovado {
+            color: var(--success-color);
             font-weight: 600;
-            display: inline-flex;
+            display: flex;
             align-items: center;
-            gap: 4px;
-            text-transform: uppercase;
+            gap: 6px;
         }
 
         .status-pendente {
-            background: rgba(251, 206, 0, 0.15);
             color: var(--warning-color);
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
         }
 
-        .status-aprovado {
-            background: rgba(34, 197, 94, 0.15);
-            color: var(--success-color);
-        }
-
-        .status-rejeitado {
-            background: rgba(239, 68, 68, 0.15);
+        .status-cancelado {
             color: var(--error-color);
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
         }
 
         /* Messages */
@@ -737,29 +713,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-        /* Empty state */
-        .empty-state {
-            text-align: center;
-            padding: 60px 20px;
-            color: var(--text-muted);
-        }
-
-        .empty-state i {
-            font-size: 64px;
+        /* Debug Section */
+        .debug-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 20px;
             margin-bottom: 20px;
-            opacity: 0.3;
         }
 
-        .empty-state h3 {
-            font-size: 20px;
-            margin-bottom: 8px;
+        .debug-buttons {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .debug-content {
+            background: var(--bg-dark);
+            padding: 20px;
+            border-radius: var(--radius);
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .debug-content pre {
             color: var(--text-light);
+            font-size: 12px;
+            line-height: 1.4;
+            margin: 0;
         }
 
-        .empty-state p {
-            font-size: 14px;
-            line-height: 1.5;
-        }
+        .debug-content .error { color: var(--error-color); }
+        .debug-content .success { color: var(--success-color); }
+        .debug-content .warning { color: var(--warning-color); }
 
         /* Pagination */
         .pagination {
@@ -791,6 +778,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .pagination span {
             color: var(--text-muted);
             font-weight: 500;
+        }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+
+        .empty-state i {
+            font-size: 64px;
+            margin-bottom: 20px;
+            opacity: 0.3;
+        }
+
+        .empty-state h3 {
+            font-size: 20px;
+            margin-bottom: 8px;
+            color: var(--text-light);
+        }
+
+        .empty-state p {
+            font-size: 14px;
+            line-height: 1.5;
         }
 
         /* Responsive */
@@ -838,6 +849,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             .stats-grid {
                 grid-template-columns: 1fr;
                 gap: 16px;
+            }
+
+            .form-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .debug-buttons {
+                flex-direction: column;
             }
 
             table {
@@ -891,10 +910,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <a href="pix_admin.php" class="stat-item">
                     <div class="stat-dot deposito"></div>
                     <span>Depósito</span>
-                    <div class="stat-badge" id="deposito-count"><?= $pendentes ?></div>
+                    <div class="stat-badge" id="deposito-count"><?= $stats['pendente'] ?></div>
                 </a>
 
-                <a href="admin_saques.php" class="stat-item">
+                <a href="saques_admin.php" class="stat-item">
                     <div class="stat-dot saque"></div>
                     <span>Saque</span>
                     <div class="stat-badge" id="saque-count">0</div>
@@ -957,7 +976,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <div class="nav-desc">Depósitos PIX</div>
                 </a>
 
-                <a href="admin_afiliados.php" class="nav-item">
+                <a href="afiliados_admin.php" class="nav-item">
                     <i class="fas fa-handshake nav-icon"></i>
                     <div class="nav-title">Indicações</div>
                     <div class="nav-desc">Sistema de afiliados</div>
@@ -984,37 +1003,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
         </div>
 
-        <?php if (isset($_SESSION['success'])): ?>
+        <?php if ($mensagem): ?>
             <div class="message success">
                 <i class="fas fa-check-circle"></i>
-                <?= $_SESSION['success'] ?>
+                <?= $mensagem ?>
             </div>
-            <?php unset($_SESSION['success']); ?>
-        <?php endif; ?>
-
-        <?php if (isset($_SESSION['error'])): ?>
-            <div class="message error">
-                <i class="fas fa-exclamation-circle"></i>
-                <?= $_SESSION['error'] ?>
-            </div>
-            <?php unset($_SESSION['error']); ?>
         <?php endif; ?>
 
         <!-- Stats Grid -->
         <div class="stats-grid">
             <div class="stat-card">
                 <div class="stat-header">
-                    <div class="stat-icon pendente">
-                        <i class="fas fa-clock"></i>
+                    <div class="stat-icon total">
+                        <i class="fas fa-list"></i>
                     </div>
-                    <div class="stat-trend" style="color: var(--warning-color);">
-                        <i class="fas fa-hourglass-half"></i>
-                        <span>Aguardando</span>
+                    <div class="stat-trend">
+                        <i class="fas fa-chart-line"></i>
+                        <span>Total</span>
                     </div>
                 </div>
-                <div class="stat-value"><?= number_format($pendentes) ?></div>
-                <div class="stat-label">Transações Pendentes</div>
-                <div class="stat-detail">R$ <?= number_format($valor_pendente, 2, ',', '.') ?> em análise</div>
+                <div class="stat-value"><?= number_format($totalGeral) ?></div>
+                <div class="stat-label">Total de Transações</div>
+                <div class="stat-detail">Todas as transações registradas</div>
             </div>
 
             <div class="stat-card">
@@ -1027,14 +1037,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <span>Processadas</span>
                     </div>
                 </div>
-                <div class="stat-value"><?= number_format($aprovadas) ?></div>
+                <div class="stat-value"><?= number_format($stats['aprovado']) ?></div>
                 <div class="stat-label">Transações Aprovadas</div>
-                <div class="stat-detail">R$ <?= number_format($total_valor, 2, ',', '.') ?> creditado</div>
+                <div class="stat-detail">Pagamentos confirmados</div>
             </div>
 
             <div class="stat-card">
                 <div class="stat-header">
-                    <div class="stat-icon rejeitado">
+                    <div class="stat-icon pendente">
+                        <i class="fas fa-clock"></i>
+                    </div>
+                    <div class="stat-trend" style="color: var(--warning-color);">
+                        <i class="fas fa-hourglass-half"></i>
+                        <span>Aguardando</span>
+                    </div>
+                </div>
+                <div class="stat-value"><?= number_format($stats['pendente']) ?></div>
+                <div class="stat-label">Transações Pendentes</div>
+                <div class="stat-detail">Aguardando confirmação</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <div class="stat-icon cancelado">
                         <i class="fas fa-times-circle"></i>
                     </div>
                     <div class="stat-trend" style="color: var(--error-color);">
@@ -1042,83 +1067,273 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <span>Rejeitadas</span>
                     </div>
                 </div>
-                <div class="stat-value"><?= number_format($rejeitadas) ?></div>
-                <div class="stat-label">Transações Rejeitadas</div>
-                <div class="stat-detail">Problemas identificados</div>
+                <div class="stat-value"><?= number_format($stats['cancelado']) ?></div>
+                <div class="stat-label">Transações Canceladas</div>
+                <div class="stat-detail">Pagamentos rejeitados</div>
             </div>
 
             <div class="stat-card">
                 <div class="stat-header">
-                    <div class="stat-icon valor">
-                        <i class="fas fa-dollar-sign"></i>
+                    <div class="stat-icon taxa">
+                        <i class="fas fa-percentage"></i>
                     </div>
-                    <div class="stat-trend">
-                        <i class="fas fa-chart-line"></i>
-                        <span>Total</span>
-                    </div>
-                </div>
-                <div class="stat-value">R$ <?= number_format($total_valor, 0, ',', '.') ?></div>
-                <div class="stat-label">Volume Total Aprovado</div>
-                <div class="stat-detail">Receita confirmada</div>
-            </div>
-
-            <div class="stat-card">
-                <div class="stat-header">
-                    <div class="stat-icon hoje">
-                        <i class="fas fa-calendar-day"></i>
-                    </div>
-                    <div class="stat-trend" style="color: var(--purple-color);">
-                        <i class="fas fa-clock"></i>
-                        <span>24h</span>
+                    <div class="stat-trend" style="color: <?= $percentualAprovado >= 80 ? 'var(--success-color)' : ($percentualAprovado >= 50 ? 'var(--warning-color)' : 'var(--error-color)') ?>;">
+                        <i class="fas fa-chart-pie"></i>
+                        <span>Taxa</span>
                     </div>
                 </div>
-                <div class="stat-value"><?= number_format($hoje) ?></div>
-                <div class="stat-label">Transações Hoje</div>
-                <div class="stat-detail">Atividade do dia</div>
+                <div class="stat-value" style="color: <?= $percentualAprovado >= 80 ? 'var(--success-color)' : ($percentualAprovado >= 50 ? 'var(--warning-color)' : 'var(--error-color)') ?>;"><?= $percentualAprovado ?>%</div>
+                <div class="stat-label">Taxa de Aprovação</div>
+                <div class="stat-detail">Percentual de sucesso</div>
             </div>
         </div>
 
-        <!-- Filters -->
+        <!-- Filtros -->
         <div class="card">
             <h3>
                 <i class="fas fa-filter"></i> Filtros de Transações
             </h3>
             
-            <form method="GET" class="filters">
-                <select name="status" class="select-input">
-                    <option value="">Todos os Status</option>
-                    <option value="pendente" <?= $status_filter === 'pendente' ? 'selected' : '' ?>>Pendentes</option>
-                    <option value="aprovado" <?= $status_filter === 'aprovado' ? 'selected' : '' ?>>Aprovadas</option>
-                    <option value="rejeitado" <?= $status_filter === 'rejeitado' ? 'selected' : '' ?>>Rejeitadas</option>
-                </select>
-                <button type="submit" class="btn btn-primary">
-                    <i class="fas fa-filter"></i>
-                    Filtrar
-                </button>
-                
-                <?php if ($status_filter): ?>
-                    <a href="pix_admin.php" class="btn btn-secondary">
-                        <i class="fas fa-times"></i>
-                        Limpar
-                    </a>
-                <?php endif; ?>
-            </form>
+            <div class="form-grid">
+                <form method="GET" action="">
+                    <div class="form-group">
+                        <label for="status">Status:</label>
+                        <select name="status" id="status" onchange="this.form.submit()">
+                            <option value="" <?= $status_filter === '' ? 'selected' : '' ?>>Todos</option>
+                            <option value="pendente" <?= $status_filter === 'pendente' ? 'selected' : '' ?>>Pendente</option>
+                            <option value="aprovado" <?= $status_filter === 'aprovado' ? 'selected' : '' ?>>Aprovado</option>
+                            <option value="cancelado" <?= $status_filter === 'cancelado' ? 'selected' : '' ?>>Cancelado</option>
+                        </select>
+                    </div>
+                </form>
+
+                <form method="GET" action="">
+                    <div class="form-group">
+                        <label for="data_inicial">Data Inicial:</label>
+                        <input type="date" name="data_inicial" id="data_inicial" value="<?= htmlspecialchars($_GET['data_inicial'] ?? '') ?>" onchange="this.form.submit()">
+                    </div>
+                </form>
+
+                <form method="GET" action="">
+                    <div class="form-group">
+                        <label for="data_final">Data Final:</label>
+                        <input type="date" name="data_final" id="data_final" value="<?= htmlspecialchars($_GET['data_final'] ?? '') ?>" onchange="this.form.submit()">
+                    </div>
+                </form>
+            </div>
         </div>
 
-        <!-- Transactions Table -->
+        <!-- Debug Webhook -->
         <div class="card">
             <h3>
-                <i class="fas fa-table"></i> Lista de Transações PIX
-                <?php if ($status_filter): ?>
+                <i class="fas fa-bug"></i> Debug Webhook
+            </h3>
+            
+            <div class="debug-buttons">
+                <a href="?action=view_logs" class="btn btn-primary">
+                    <i class="fas fa-file-alt"></i> Ver Logs do Webhook
+                </a>
+                <a href="?action=test_webhook" class="btn btn-primary">
+                    <i class="fas fa-play"></i> Testar Webhook
+                </a>
+                <a href="?action=check_pending" class="btn btn-primary">
+                    <i class="fas fa-clock"></i> Verificar Pendentes
+                </a>
+                <a href="?action=check_user_balance" class="btn btn-primary">
+                    <i class="fas fa-user-check"></i> Verificar Saldo Usuário
+                </a>
+                <a href="debug_webhook.php" class="btn btn-primary">
+                    <i class="fas fa-cogs"></i> Debug Completo
+                </a>
+            </div>
+
+            <?php
+            $action = $_GET['action'] ?? '';
+            
+            if ($action === 'view_logs') {
+                echo '<div class="debug-content">';
+                echo '<h4 style="color: var(--primary-green); margin-bottom: 15px;">Últimos Logs do Webhook:</h4>';
+                
+                if (file_exists('log_webhook_expfypay.txt')) {
+                    $logs = file_get_contents('log_webhook_expfypay.txt');
+                    $lines = explode("\n", $logs);
+                    $recentLines = array_slice($lines, -50); // Últimas 50 linhas
+                    
+                    echo '<pre>';
+                    foreach ($recentLines as $line) {
+                        if (trim($line)) {
+                            if (strpos($line, 'ERRO') !== false) {
+                                echo '<span class="error">' . htmlspecialchars($line) . '</span>' . "\n";
+                            } elseif (strpos($line, 'SUCESSO') !== false) {
+                                echo '<span class="success">' . htmlspecialchars($line) . '</span>' . "\n";
+                            } elseif (strpos($line, 'AVISO') !== false) {
+                                echo '<span class="warning">' . htmlspecialchars($line) . '</span>' . "\n";
+                            } else {
+                                echo htmlspecialchars($line) . "\n";
+                            }
+                        }
+                    }
+                    echo '</pre>';
+                } else {
+                    echo '<p style="color: var(--text-muted);">Nenhum log encontrado.</p>';
+                }
+                echo '</div>';
+            }
+            
+            if ($action === 'check_pending') {
+                echo '<div class="debug-content">';
+                echo '<h4 style="color: var(--primary-green); margin-bottom: 15px;">Transações Pendentes:</h4>';
+                
+                $stmtPending = $pdo->query("SELECT * FROM transacoes_pix WHERE LOWER(status) IN ('pendente', 'pending', 'aguardando') ORDER BY criado_em DESC LIMIT 10");
+                $pending = $stmtPending->fetchAll();
+                
+                if (count($pending) > 0) {
+                    echo '<div class="table-container">';
+                    echo '<table>';
+                    echo '<thead><tr>';
+                    echo '<th>ID</th>';
+                    echo '<th>Usuário</th>';
+                    echo '<th>Valor</th>';
+                    echo '<th>External ID</th>';
+                    echo '<th>Criado em</th>';
+                    echo '</tr></thead>';
+                    echo '<tbody>';
+                    
+                    foreach ($pending as $p) {
+                        echo '<tr>';
+                        echo '<td>' . $p['id'] . '</td>';
+                        echo '<td>' . $p['usuario_id'] . '</td>';
+                        echo '<td>R$ ' . number_format($p['valor'], 2, ',', '.') . '</td>';
+                        echo '<td style="font-family: monospace;">' . $p['external_id'] . '</td>';
+                        echo '<td>' . date('d/m/Y H:i:s', strtotime($p['criado_em'])) . '</td>';
+                        echo '</tr>';
+                    }
+                    echo '</tbody></table>';
+                    echo '</div>';
+                } else {
+                    echo '<p style="color: var(--success-color);">✓ Nenhuma transação pendente encontrada.</p>';
+                }
+                echo '</div>';
+            }
+            
+            if ($action === 'test_webhook') {
+                echo '<div class="debug-content">';
+                echo '<h4 style="color: var(--primary-green); margin-bottom: 15px;">Teste de Webhook:</h4>';
+                echo '<p style="color: var(--text-muted); margin-bottom: 15px;">Use este formulário para testar o webhook com dados simulados:</p>';
+                
+                // Mostrar mensagem se houver
+                if (isset($_GET['msg']) && isset($_GET['type'])) {
+                    $msg = htmlspecialchars($_GET['msg']);
+                    $type = $_GET['type'];
+                    $color = $type === 'success' ? 'var(--success-color)' : 'var(--error-color)';
+                    echo '<div class="message ' . $type . '">';
+                    echo '<i class="fas fa-' . ($type === 'success' ? 'check-circle' : 'exclamation-circle') . '"></i> ' . $msg;
+                    echo '</div>';
+                }
+                
+                echo '<form method="POST" action="test_webhook.php" style="display: grid; gap: 12px; max-width: 400px;">';
+                echo '<div class="form-group">';
+                echo '<label>Transaction ID:</label>';
+                echo '<input type="text" name="transaction_id" value="TEST_' . time() . '" required>';
+                echo '</div>';
+                echo '<div class="form-group">';
+                echo '<label>External ID:</label>';
+                echo '<input type="text" name="external_id" value="EXT_' . time() . '" required>';
+                echo '</div>';
+                echo '<div class="form-group">';
+                echo '<label>Valor:</label>';
+                echo '<input type="number" name="amount" value="10.00" step="0.01" required>';
+                echo '</div>';
+                echo '<button type="submit" class="btn btn-primary">';
+                echo '<i class="fas fa-paper-plane"></i> Enviar Teste';
+                echo '</button>';
+                echo '</form>';
+                echo '</div>';
+            }
+            
+            if ($action === 'check_user_balance') {
+                echo '<div class="debug-content">';
+                echo '<h4 style="color: var(--primary-green); margin-bottom: 15px;">Verificar Saldo de Usuário:</h4>';
+                
+                if ($_POST['user_id'] ?? false) {
+                    $user_id = intval($_POST['user_id']);
+                    
+                    $stmtUser = $pdo->prepare("SELECT id, nome, email, saldo, comissao FROM usuarios WHERE id = ?");
+                    $stmtUser->execute([$user_id]);
+                    $user = $stmtUser->fetch();
+                    
+                    if ($user) {
+                        echo '<div style="background: var(--bg-panel); padding: 15px; border-radius: 8px; margin-bottom: 15px;">';
+                        echo '<h5 style="color: var(--primary-green); margin-bottom: 10px;">Dados do Usuário:</h5>';
+                        echo '<p><strong>ID:</strong> ' . $user['id'] . '</p>';
+                        echo '<p><strong>Nome:</strong> ' . htmlspecialchars($user['nome']) . '</p>';
+                        echo '<p><strong>Email:</strong> ' . htmlspecialchars($user['email']) . '</p>';
+                        echo '<p><strong>Saldo:</strong> <span style="color: var(--success-color); font-weight: bold;">R$ ' . number_format($user['saldo'], 2, ',', '.') . '</span></p>';
+                        echo '<p><strong>Comissão:</strong> R$ ' . number_format($user['comissao'], 2, ',', '.') . '</p>';
+                        echo '</div>';
+                        
+                        // Últimas transações do usuário
+                        $stmtTrans = $pdo->prepare("SELECT * FROM transacoes_pix WHERE usuario_id = ? ORDER BY criado_em DESC LIMIT 5");
+                        $stmtTrans->execute([$user_id]);
+                        $transacoes_user = $stmtTrans->fetchAll();
+                        
+                        if (count($transacoes_user) > 0) {
+                            echo '<h5 style="color: var(--primary-green); margin-bottom: 10px;">Últimas 5 Transações:</h5>';
+                            echo '<div class="table-container">';
+                            echo '<table>';
+                            echo '<thead><tr>';
+                            echo '<th>ID</th>';
+                            echo '<th>Valor</th>';
+                            echo '<th>Status</th>';
+                            echo '<th>Criado em</th>';
+                            echo '</tr></thead>';
+                            echo '<tbody>';
+                            
+                            foreach ($transacoes_user as $t) {
+                                $statusColor = $t['status'] === 'aprovado' ? 'var(--success-color)' : ($t['status'] === 'pendente' ? 'var(--warning-color)' : 'var(--error-color)');
+                                echo '<tr>';
+                                echo '<td>' . $t['id'] . '</td>';
+                                echo '<td>R$ ' . number_format($t['valor'], 2, ',', '.') . '</td>';
+                                echo '<td style="color: ' . $statusColor . ';">' . ucfirst($t['status']) . '</td>';
+                                echo '<td>' . date('d/m/Y H:i:s', strtotime($t['criado_em'])) . '</td>';
+                                echo '</tr>';
+                            }
+                            echo '</tbody></table>';
+                            echo '</div>';
+                        }
+                    } else {
+                        echo '<p style="color: var(--error-color);">Usuário não encontrado.</p>';
+                    }
+                }
+                
+                echo '<form method="POST" style="display: flex; gap: 12px; align-items: end; margin-top: 15px;">';
+                echo '<div class="form-group" style="margin: 0;">';
+                echo '<label>ID do Usuário:</label>';
+                echo '<input type="number" name="user_id" placeholder="Digite o ID do usuário" required>';
+                echo '</div>';
+                echo '<button type="submit" class="btn btn-primary">';
+                echo '<i class="fas fa-search"></i> Verificar';
+                echo '</button>';
+                echo '</form>';
+                echo '</div>';
+            }
+            ?>
+        </div>
+
+        <!-- Tabela de Transações -->
+        <div class="card">
+            <h3>
+                <i class="fas fa-table"></i> Lista de Transações
+                <?php if ($total > 0): ?>
                     <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(<?= $total ?> resultados)</span>
                 <?php endif; ?>
             </h3>
             
-            <?php if (empty($transacoes)): ?>
+            <?php if (count($transacoes) === 0): ?>
                 <div class="empty-state">
                     <i class="fas fa-exchange-alt"></i>
                     <h3>Nenhuma transação encontrada</h3>
-                    <p><?= $status_filter ? 'Nenhuma transação encontrada para este filtro.' : 'Ainda não há transações PIX registradas.' ?></p>
+                    <p>Ainda não há transações PIX registradas ou nenhuma transação corresponde aos filtros aplicados.</p>
                 </div>
             <?php else: ?>
                 <div class="table-container">
@@ -1127,108 +1342,74 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <tr>
                                 <th>ID</th>
                                 <th>Usuário</th>
-                                <th>Valor</th>
+                                <th>Telefone</th>
+                                <th>Valor (R$)</th>
+                                <th>External ID</th>
                                 <th>Status</th>
-                                <th>Gateway</th>
-                                <th>Data</th>
-                                <th>Ações</th>
+                                <th>Criado em</th>
+                                <th>Transaction ID</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <?php foreach ($transacoes as $transacao): ?>
+                            <?php foreach ($transacoes as $t): ?>
                                 <tr>
                                     <td>
-                                        <strong style="color: var(--primary-green);">#<?= $transacao['id'] ?></strong>
+                                        <strong style="color: var(--primary-green);">#<?= htmlspecialchars($t['id']) ?></strong>
                                     </td>
-                                    <td>
-                                        <div>
-                                            <strong style="color: var(--text-light);"><?= htmlspecialchars($transacao['nome'] ?? 'Usuário #' . $transacao['usuario_id']) ?></strong>
-                                            <br>
-                                            <small style="color: var(--text-muted);"><?= htmlspecialchars($transacao['email'] ?? '') ?></small>
-                                        </div>
-                                    </td>
+                                    <td><?= htmlspecialchars($t['usuario_id']) ?></td>
+                                    <td><?= htmlspecialchars($t['telefone']) ?></td>
                                     <td>
                                         <div style="font-weight: 700; color: var(--primary-green); font-size: 14px;">
-                                            R$ <?= number_format($transacao['valor'], 2, ',', '.') ?>
+                                            R$ <?= number_format($t['valor'], 2, ',', '.') ?>
                                         </div>
                                     </td>
-                                    <td>
-                                        <?php
-                                            $status = $transacao['status'];
-                                            $icon = $status === 'aprovado' ? 'check-circle' : ($status === 'pendente' ? 'clock' : 'times-circle');
-                                        ?>
-                                        <span class="status-badge status-<?= $status ?>">
-                                            <i class="fas fa-<?= $icon ?>"></i>
-                                            <?= ucfirst($status) ?>
-                                        </span>
+                                    <td style="font-family: monospace; font-size: 11px;"><?= htmlspecialchars($t['external_id']) ?></td>
+                                    <?php
+                                        $status = htmlspecialchars($t['status']);
+                                        $classeStatus = 'status-' . strtolower($status);
+                                        $iconStatus = $status === 'aprovado' ? 'check-circle' : ($status === 'pendente' ? 'clock' : 'times-circle');
+                                    ?>
+                                    <td class="<?= $classeStatus ?>" style="text-transform: capitalize;">
+                                        <i class="fas fa-<?= $iconStatus ?>"></i>
+                                        <?= $status ?>
                                     </td>
-                                    <td>
-                                        <div style="font-size: 12px; color: var(--text-muted);">
-                                            <?= htmlspecialchars($transacao['gateway'] ?? 'PIX') ?>
-                                        </div>
-                                    </td>
+                                    <?php
+                                        $dt = new DateTime($t['criado_em'], new DateTimeZone('UTC'));
+                                        $dt->setTimezone(new DateTimeZone('America/Sao_Paulo'));
+                                    ?>
                                     <td>
                                         <div style="font-size: 12px;">
-                                            <?= date('d/m/Y H:i', strtotime($transacao['data_transacao'])) ?>
+                                            <?= $dt->format('d/m/Y H:i:s') ?>
                                         </div>
                                     </td>
-                                    <td>
-                                        <?php if ($transacao['status'] === 'pendente'): ?>
-                                            <div style="display: flex; gap: 4px; flex-wrap: wrap;">
-                                                <form method="POST" style="display: inline;">
-                                                    <input type="hidden" name="action" value="aprovar">
-                                                    <input type="hidden" name="transacao_id" value="<?= $transacao['id'] ?>">
-                                                    <button type="submit" 
-                                                            class="btn btn-success" 
-                                                            onclick="return confirm('Aprovar transação e creditar saldo?')"
-                                                            style="padding: 6px 12px; font-size: 11px;">
-                                                        <i class="fas fa-check"></i>
-                                                        Aprovar
-                                                    </button>
-                                                </form>
-                                                
-                                                <form method="POST" style="display: inline;">
-                                                    <input type="hidden" name="action" value="rejeitar">
-                                                    <input type="hidden" name="transacao_id" value="<?= $transacao['id'] ?>">
-                                                    <button type="submit" 
-                                                            class="btn btn-danger" 
-                                                            onclick="return confirm('Rejeitar transação?')"
-                                                            style="padding: 6px 12px; font-size: 11px;">
-                                                        <i class="fas fa-times"></i>
-                                                        Rejeitar
-                                                    </button>
-                                                </form>
-                                            </div>
-                                        <?php else: ?>
-                                            <span style="color: var(--text-muted); font-style: italic; font-size: 12px;">
-                                                <?= $transacao['status'] === 'aprovado' ? 'Processada' : 'Rejeitada' ?>
-                                            </span>
-                                        <?php endif; ?>
-                                    </td>
+                                    <td style="font-family: monospace; font-size: 11px;"><?= htmlspecialchars($t['transaction_id']) ?></td>
                                 </tr>
                             <?php endforeach; ?>
                         </tbody>
                     </table>
                 </div>
 
-                <!-- Pagination -->
-                <?php if ($total_pages > 1): ?>
+                <!-- Paginação -->
+                <?php if ($totalPaginas > 1): ?>
                     <div class="pagination">
                         <?php
-                        $query_params = ['status' => $status_filter];
-                        $query_string = http_build_query(array_filter($query_params));
+                        $queryString = http_build_query([
+                            'status' => $status_filter,
+                            'data_inicial' => $data_inicial,
+                            'data_final' => $data_final
+                        ]);
                         ?>
 
-                        <?php if ($page > 1): ?>
-                            <a href="?<?= $query_string ?>&page=<?= $page - 1 ?>">
+                        <?php if ($pagina > 1): ?>
+                            <a href="?<?= $queryString ?>&pagina=<?= $pagina - 1 ?>">
                                 <i class="fas fa-chevron-left"></i> Anterior
                             </a>
                         <?php endif; ?>
 
-                        <span>Página <?= $page ?> de <?= $total_pages ?></span>
+                        <span>Página <?= $pagina ?> de <?= $totalPaginas ?></span>
 
-                        <?php if ($page < $total_pages): ?>
-                            <a href="?<?= $query_string ?>&page=<?= $page + 1 ?>">
+                        <?php if ($pagina < $totalPaginas): ?>
+                            <a href="?<?= $queryString ?>&pagina=<?= $pagina + 1 ?>">
                                 Próximo <i class="fas fa-chevron-right"></i>
                             </a>
                         <?php endif; ?>
