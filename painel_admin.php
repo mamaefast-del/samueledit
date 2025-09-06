@@ -3,6 +3,120 @@ session_start();
 
 if (!isset($_SESSION['admin']) || $_SESSION['admin'] !== true) {
     header('Location: login.php');
+    
+    try {
+        // Criar tabelas se não existirem
+        $pdo->exec("CREATE TABLE IF NOT EXISTS usuarios (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            nome VARCHAR(100) NOT NULL,
+            email VARCHAR(100) UNIQUE NOT NULL,
+            senha VARCHAR(255) NOT NULL,
+            saldo DECIMAL(10,2) DEFAULT 0.00,
+            data_cadastro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )");
+        
+        $pdo->exec("CREATE TABLE IF NOT EXISTS jogos (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            nome VARCHAR(100) NOT NULL,
+            categoria VARCHAR(50),
+            imagem VARCHAR(255),
+            ativo BOOLEAN DEFAULT TRUE,
+            data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )");
+        
+        $pdo->exec("CREATE TABLE IF NOT EXISTS apostas (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            usuario_id INT,
+            jogo_id INT,
+            valor DECIMAL(10,2) NOT NULL,
+            resultado ENUM('ganhou', 'perdeu', 'pendente') DEFAULT 'pendente',
+            data_aposta TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (usuario_id) REFERENCES usuarios(id),
+            FOREIGN KEY (jogo_id) REFERENCES jogos(id)
+        )");
+        
+        $pdo->exec("CREATE TABLE IF NOT EXISTS depositos (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            usuario_id INT NOT NULL,
+            valor DECIMAL(10,2) NOT NULL,
+            metodo VARCHAR(50) DEFAULT 'PIX',
+            status ENUM('pendente', 'aprovado', 'rejeitado') DEFAULT 'pendente',
+            data_solicitacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+        )");
+        
+        // Inserir dados de exemplo se não existirem
+        $stmt = $pdo->query("SELECT COUNT(*) FROM usuarios");
+        if ($stmt->fetchColumn() == 0) {
+            $pdo->exec("INSERT INTO usuarios (nome, email, senha, saldo) VALUES 
+                ('João Silva', 'joao@email.com', '" . password_hash('123456', PASSWORD_DEFAULT) . "', 150.00),
+                ('Maria Santos', 'maria@email.com', '" . password_hash('123456', PASSWORD_DEFAULT) . "', 200.00),
+                ('Pedro Costa', 'pedro@email.com', '" . password_hash('123456', PASSWORD_DEFAULT) . "', 75.50)");
+        }
+        
+        $stmt = $pdo->query("SELECT COUNT(*) FROM jogos");
+        if ($stmt->fetchColumn() == 0) {
+            $pdo->exec("INSERT INTO jogos (nome, categoria, imagem) VALUES 
+                ('Fortune Tiger', 'Slots', 'https://via.placeholder.com/150x150/FFD700/000000?text=🐅'),
+                ('Aviator', 'Crash', 'https://via.placeholder.com/150x150/00CED1/000000?text=✈️'),
+                ('Mines', 'Estratégia', 'https://via.placeholder.com/150x150/FF6347/000000?text=💣'),
+                ('Blackjack', 'Cartas', 'https://via.placeholder.com/150x150/2E8B57/000000?text=🃏'),
+                ('Roleta', 'Mesa', 'https://via.placeholder.com/150x150/DC143C/000000?text=🎰')");
+        }
+        
+        // Buscar estatísticas
+        $stats = [];
+        
+        // Total de usuários
+        $stmt = $pdo->query("SELECT COUNT(*) FROM usuarios");
+        $stats['total_usuarios'] = $stmt->fetchColumn();
+        
+        // Novos usuários (últimos 30 dias)
+        $stmt = $pdo->query("SELECT COUNT(*) FROM usuarios WHERE data_cadastro >= DATE_SUB(NOW(), INTERVAL 30 DAY)");
+        $stats['novos_usuarios'] = $stmt->fetchColumn();
+        
+        // Total de depósitos aprovados
+        $stmt = $pdo->query("SELECT COALESCE(SUM(valor), 0) FROM depositos WHERE status = 'aprovado'");
+        $stats['total_depositos'] = $stmt->fetchColumn();
+        
+        // Depósitos pendentes
+        $stmt = $pdo->query("SELECT COUNT(*) FROM depositos WHERE status = 'pendente'");
+        $stats['depositos_pendentes'] = $stmt->fetchColumn();
+        
+        // Total de apostas
+        $stmt = $pdo->query("SELECT COUNT(*) FROM apostas");
+        $stats['total_apostas'] = $stmt->fetchColumn();
+        
+        // Apostas hoje
+        $stmt = $pdo->query("SELECT COUNT(*) FROM apostas WHERE DATE(data_aposta) = CURDATE()");
+        $stats['apostas_hoje'] = $stmt->fetchColumn();
+        
+        // Top jogos
+        $stmt = $pdo->query("
+            SELECT j.nome, j.categoria, j.imagem, COUNT(a.id) as total_apostas
+            FROM jogos j 
+            LEFT JOIN apostas a ON j.id = a.jogo_id 
+            WHERE j.ativo = 1
+            GROUP BY j.id 
+            ORDER BY total_apostas DESC 
+            LIMIT 5
+        ");
+        $stats['top_jogos'] = $stmt->fetchAll();
+        
+        // Usuários recentes
+        $stmt = $pdo->query("
+            SELECT nome, email, saldo, data_cadastro 
+            FROM usuarios 
+            ORDER BY data_cadastro DESC 
+            LIMIT 5
+        ");
+        $stats['usuarios_recentes'] = $stmt->fetchAll();
+        
+        echo json_encode($stats);
+        
+    } catch (Exception $e) {
+        echo json_encode(['error' => 'Erro ao buscar estatísticas: ' . $e->getMessage()]);
+    }
     exit;
 }
 
