@@ -35,9 +35,22 @@ try {
     $stmt = $pdo->query("SELECT COUNT(*) FROM usuarios WHERE saldo > 0");
     $usuarios_ativos = $stmt->fetchColumn();
     
+    // Saldo total dos usuários
+    $stmt = $pdo->query("SELECT COALESCE(SUM(saldo), 0) FROM usuarios");
+    $saldo_total_usuarios = $stmt->fetchColumn();
+    
+    // Depósitos hoje
+    $stmt = $pdo->query("SELECT COUNT(*) FROM depositos WHERE DATE(data_solicitacao) = CURDATE()");
+    $depositos_hoje = $stmt->fetchColumn();
+    
+    // Saques hoje
+    $stmt = $pdo->query("SELECT COUNT(*) FROM saques WHERE DATE(data_solicitacao) = CURDATE()");
+    $saques_hoje = $stmt->fetchColumn();
+    
 } catch (PDOException $e) {
     $total_usuarios = $depositos_pendentes = $saques_pendentes = 0;
     $total_depositos = $total_saques = $usuarios_ativos = 0;
+    $saldo_total_usuarios = $depositos_hoje = $saques_hoje = 0;
 }
 
 // Buscar últimas atividades
@@ -99,6 +112,7 @@ try {
             --success-color: #22c55e;
             --error-color: #ef4444;
             --warning-color: #f59e0b;
+            --info-color: #3b82f6;
         }
 
         * {
@@ -121,6 +135,7 @@ try {
             display: flex;
             justify-content: space-between;
             align-items: center;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
         }
 
         .header h1 {
@@ -131,6 +146,8 @@ try {
             display: flex;
             align-items: center;
             gap: 12px;
+            font-size: 24px;
+            font-weight: 800;
         }
 
         .header-actions {
@@ -149,6 +166,7 @@ try {
             align-items: center;
             gap: 8px;
             transition: all 0.3s ease;
+            font-size: 14px;
         }
 
         .btn-primary { 
@@ -160,8 +178,23 @@ try {
             transform: translateY(-2px);
             box-shadow: 0 6px 20px rgba(251, 206, 0, 0.4);
         }
-        .btn-secondary { background: var(--bg-card); color: var(--text-light); border: 1px solid var(--border-color); }
-        .btn-danger { background: var(--error-color); color: white; }
+        .btn-secondary { 
+            background: var(--bg-card); 
+            color: var(--text-light); 
+            border: 1px solid var(--border-color); 
+        }
+        .btn-secondary:hover {
+            background: var(--border-color);
+            transform: translateY(-1px);
+        }
+        .btn-danger { 
+            background: var(--error-color); 
+            color: white; 
+        }
+        .btn-danger:hover {
+            background: #dc2626;
+            transform: translateY(-1px);
+        }
 
         .container {
             max-width: 1400px;
@@ -171,7 +204,7 @@ try {
 
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
             gap: 20px;
             margin-bottom: 30px;
         }
@@ -183,6 +216,12 @@ try {
             border: 1px solid var(--border-color);
             position: relative;
             overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
         }
 
         .stat-card::before {
@@ -216,6 +255,7 @@ try {
         .stat-icon.deposits { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
         .stat-icon.withdrawals { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
         .stat-icon.money { background: rgba(251, 206, 0, 0.1); color: var(--primary-gold); }
+        .stat-icon.pending { background: rgba(245, 158, 11, 0.1); color: var(--warning-color); }
 
         .stat-value {
             font-size: 28px;
@@ -243,12 +283,15 @@ try {
             border: 1px solid var(--border-color);
             text-align: center;
             transition: all 0.3s ease;
+            text-decoration: none;
+            color: var(--text-light);
         }
 
         .action-card:hover {
             transform: translateY(-2px);
             border-color: var(--primary-green);
             box-shadow: 0 8px 24px rgba(0, 212, 170, 0.1);
+            color: var(--text-light);
         }
 
         .action-icon {
@@ -262,6 +305,17 @@ try {
             font-size: 24px;
             background: linear-gradient(135deg, var(--primary-gold), var(--primary-green));
             color: #000;
+        }
+
+        .action-card h3 {
+            margin-bottom: 8px;
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .action-card p {
+            color: var(--text-muted);
+            font-size: 14px;
         }
 
         .recent-activity {
@@ -288,6 +342,7 @@ try {
         .activity-header h3 {
             color: var(--text-light);
             font-weight: 600;
+            font-size: 16px;
         }
 
         .activity-list {
@@ -311,6 +366,7 @@ try {
             color: var(--text-light);
             font-size: 14px;
             margin-bottom: 4px;
+            font-weight: 600;
         }
 
         .activity-info p {
@@ -329,6 +385,8 @@ try {
             font-size: 11px;
             font-weight: 600;
             text-transform: uppercase;
+            margin-top: 4px;
+            display: inline-block;
         }
 
         .status-pendente { background: var(--warning-color); color: white; }
@@ -347,6 +405,34 @@ try {
             opacity: 0.5;
         }
 
+        .alert {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .alert-info {
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid var(--info-color);
+            color: var(--info-color);
+        }
+
+        .refresh-indicator {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: var(--bg-panel);
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            font-size: 12px;
+            color: var(--text-muted);
+            display: none;
+        }
+
         @media (max-width: 768px) {
             .stats-grid {
                 grid-template-columns: 1fr;
@@ -357,6 +443,23 @@ try {
             }
             
             .recent-activity {
+                grid-template-columns: 1fr;
+            }
+
+            .header {
+                flex-direction: column;
+                gap: 16px;
+                text-align: center;
+            }
+
+            .header-actions {
+                width: 100%;
+                justify-content: center;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .quick-actions {
                 grid-template-columns: 1fr;
             }
         }
@@ -380,7 +483,17 @@ try {
         </div>
     </div>
 
+    <div class="refresh-indicator" id="refreshIndicator">
+        <i class="fas fa-sync-alt fa-spin"></i>
+        Atualizando dados...
+    </div>
+
     <div class="container">
+        <div class="alert alert-info">
+            <i class="fas fa-info-circle"></i>
+            Bem-vindo ao painel administrativo! Os dados são atualizados automaticamente a cada 30 segundos.
+        </div>
+
         <!-- Estatísticas -->
         <div class="stats-grid">
             <div class="stat-card">
@@ -413,8 +526,8 @@ try {
                         <div class="stat-value"><?= number_format($depositos_pendentes) ?></div>
                         <div class="stat-label">Depósitos Pendentes</div>
                     </div>
-                    <div class="stat-icon deposits">
-                        <i class="fas fa-arrow-down"></i>
+                    <div class="stat-icon pending">
+                        <i class="fas fa-clock"></i>
                     </div>
                 </div>
             </div>
@@ -425,8 +538,8 @@ try {
                         <div class="stat-value"><?= number_format($saques_pendentes) ?></div>
                         <div class="stat-label">Saques Pendentes</div>
                     </div>
-                    <div class="stat-icon withdrawals">
-                        <i class="fas fa-arrow-up"></i>
+                    <div class="stat-icon pending">
+                        <i class="fas fa-hourglass-half"></i>
                     </div>
                 </div>
             </div>
@@ -437,8 +550,8 @@ try {
                         <div class="stat-value">R$ <?= number_format($total_depositos, 2, ',', '.') ?></div>
                         <div class="stat-label">Total Depositado</div>
                     </div>
-                    <div class="stat-icon money">
-                        <i class="fas fa-coins"></i>
+                    <div class="stat-icon deposits">
+                        <i class="fas fa-arrow-down"></i>
                     </div>
                 </div>
             </div>
@@ -449,8 +562,32 @@ try {
                         <div class="stat-value">R$ <?= number_format($total_saques, 2, ',', '.') ?></div>
                         <div class="stat-label">Total Sacado</div>
                     </div>
+                    <div class="stat-icon withdrawals">
+                        <i class="fas fa-arrow-up"></i>
+                    </div>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <div>
+                        <div class="stat-value">R$ <?= number_format($saldo_total_usuarios, 2, ',', '.') ?></div>
+                        <div class="stat-label">Saldo Total Usuários</div>
+                    </div>
                     <div class="stat-icon money">
-                        <i class="fas fa-money-bill-wave"></i>
+                        <i class="fas fa-wallet"></i>
+                    </div>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <div>
+                        <div class="stat-value"><?= number_format($depositos_hoje + $saques_hoje) ?></div>
+                        <div class="stat-label">Transações Hoje</div>
+                    </div>
+                    <div class="stat-icon money">
+                        <i class="fas fa-exchange-alt"></i>
                     </div>
                 </div>
             </div>
@@ -611,9 +748,20 @@ try {
     </div>
 
     <script>
+        // Função para mostrar indicador de atualização
+        function showRefreshIndicator() {
+            document.getElementById('refreshIndicator').style.display = 'block';
+            setTimeout(() => {
+                document.getElementById('refreshIndicator').style.display = 'none';
+            }, 2000);
+        }
+
         // Atualizar dados a cada 30 segundos
         setInterval(function() {
-            location.reload();
+            showRefreshIndicator();
+            setTimeout(() => {
+                location.reload();
+            }, 1000);
         }, 30000);
 
         // Adicionar efeitos visuais
@@ -624,6 +772,31 @@ try {
             
             card.addEventListener('mouseleave', function() {
                 this.style.transform = 'translateY(0)';
+            });
+        });
+
+        // Adicionar efeitos aos cards de estatísticas
+        document.querySelectorAll('.stat-card').forEach(card => {
+            card.addEventListener('mouseenter', function() {
+                this.style.transform = 'translateY(-2px)';
+            });
+            
+            card.addEventListener('mouseleave', function() {
+                this.style.transform = 'translateY(0)';
+            });
+        });
+
+        // Animação de entrada dos elementos
+        document.addEventListener('DOMContentLoaded', function() {
+            const cards = document.querySelectorAll('.stat-card, .action-card, .activity-card');
+            cards.forEach((card, index) => {
+                card.style.opacity = '0';
+                card.style.transform = 'translateY(20px)';
+                setTimeout(() => {
+                    card.style.transition = 'all 0.5s ease';
+                    card.style.opacity = '1';
+                    card.style.transform = 'translateY(0)';
+                }, index * 100);
             });
         });
     </script>
