@@ -652,6 +652,10 @@ $valoresCadastros = array_values($cadastrosPorDia);
             .nav-grid {
                 grid-template-columns: repeat(2, 1fr);
             }
+
+            .header {
+                padding: 0 16px;
+            }
         }
 
         @media (max-width: 480px) {
