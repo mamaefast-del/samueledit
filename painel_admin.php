@@ -12,39 +12,39 @@ require 'db.php';
 // Buscar estatísticas gerais
 try {
     // Total de usuários
-    $stmt = $pdo->query("SELECT COUNT(*) FROM usuarios");
+    $stmt = $pdo->query("SELECT COUNT(*) FROM users");
     $total_usuarios = $stmt->fetchColumn();
     
     // Total de depósitos pendentes
-    $stmt = $pdo->query("SELECT COUNT(*) FROM depositos WHERE status = 'pendente'");
+    $stmt = $pdo->query("SELECT COUNT(*) FROM deposits WHERE status = 'pending'");
     $depositos_pendentes = $stmt->fetchColumn();
     
     // Total de saques pendentes
-    $stmt = $pdo->query("SELECT COUNT(*) FROM saques WHERE status = 'pendente'");
+    $stmt = $pdo->query("SELECT COUNT(*) FROM withdrawals WHERE status = 'pending'");
     $saques_pendentes = $stmt->fetchColumn();
     
     // Valor total em depósitos aprovados
-    $stmt = $pdo->query("SELECT COALESCE(SUM(valor), 0) FROM depositos WHERE status = 'aprovado'");
+    $stmt = $pdo->query("SELECT COALESCE(SUM(amount), 0) FROM deposits WHERE status = 'approved'");
     $total_depositos = $stmt->fetchColumn();
     
     // Valor total em saques aprovados
-    $stmt = $pdo->query("SELECT COALESCE(SUM(valor), 0) FROM saques WHERE status = 'aprovado'");
+    $stmt = $pdo->query("SELECT COALESCE(SUM(amount), 0) FROM withdrawals WHERE status = 'approved'");
     $total_saques = $stmt->fetchColumn();
     
     // Usuários ativos (com saldo > 0)
-    $stmt = $pdo->query("SELECT COUNT(*) FROM usuarios WHERE saldo > 0");
+    $stmt = $pdo->query("SELECT COUNT(*) FROM users WHERE balance > 0");
     $usuarios_ativos = $stmt->fetchColumn();
     
     // Saldo total dos usuários
-    $stmt = $pdo->query("SELECT COALESCE(SUM(saldo), 0) FROM usuarios");
+    $stmt = $pdo->query("SELECT COALESCE(SUM(balance), 0) FROM users");
     $saldo_total_usuarios = $stmt->fetchColumn();
     
     // Depósitos hoje
-    $stmt = $pdo->query("SELECT COUNT(*) FROM depositos WHERE DATE(data_solicitacao) = CURDATE()");
+    $stmt = $pdo->query("SELECT COUNT(*) FROM deposits WHERE DATE(created_at) = CURDATE()");
     $depositos_hoje = $stmt->fetchColumn();
     
     // Saques hoje
-    $stmt = $pdo->query("SELECT COUNT(*) FROM saques WHERE DATE(data_solicitacao) = CURDATE()");
+    $stmt = $pdo->query("SELECT COUNT(*) FROM withdrawals WHERE DATE(created_at) = CURDATE()");
     $saques_hoje = $stmt->fetchColumn();
     
 } catch (PDOException $e) {
@@ -57,10 +57,10 @@ try {
 try {
     // Últimos depósitos
     $stmt = $pdo->prepare("
-        SELECT d.*, u.nome, u.email 
-        FROM depositos d 
-        LEFT JOIN usuarios u ON d.usuario_id = u.id 
-        ORDER BY d.data_solicitacao DESC 
+        SELECT d.*, u.name, u.email 
+        FROM deposits d 
+        LEFT JOIN users u ON d.user_id = u.id 
+        ORDER BY d.created_at DESC 
         LIMIT 5
     ");
     $stmt->execute();
@@ -68,10 +68,10 @@ try {
     
     // Últimos saques
     $stmt = $pdo->prepare("
-        SELECT s.*, u.nome, u.email 
-        FROM saques s 
-        LEFT JOIN usuarios u ON s.usuario_id = u.id 
-        ORDER BY s.data_solicitacao DESC 
+        SELECT s.*, u.name, u.email 
+        FROM withdrawals s 
+        LEFT JOIN users u ON s.user_id = u.id 
+        ORDER BY s.created_at DESC 
         LIMIT 5
     ");
     $stmt->execute();
@@ -79,8 +79,8 @@ try {
     
     // Últimos usuários cadastrados
     $stmt = $pdo->prepare("
-        SELECT * FROM usuarios 
-        ORDER BY data_cadastro DESC 
+        SELECT * FROM users 
+        ORDER BY created_at DESC 
         LIMIT 5
     ");
     $stmt->execute();
@@ -662,12 +662,12 @@ try {
                         <?php foreach ($ultimos_depositos as $deposito): ?>
                             <div class="activity-item">
                                 <div class="activity-info">
-                                    <h4><?= htmlspecialchars($deposito['nome'] ?? 'Usuário #' . $deposito['usuario_id']) ?></h4>
-                                    <p><?= date('d/m/Y H:i', strtotime($deposito['data_solicitacao'])) ?></p>
+                                    <h4><?= htmlspecialchars($deposito['name'] ?? 'Usuário #' . $deposito['user_id']) ?></h4>
+                                    <p><?= date('d/m/Y H:i', strtotime($deposito['created_at'])) ?></p>
                                 </div>
                                 <div style="text-align: right;">
                                     <div class="activity-value" style="color: var(--success-color);">
-                                        R$ <?= number_format($deposito['valor'], 2, ',', '.') ?>
+                                        R$ <?= number_format($deposito['amount'], 2, ',', '.') ?>
                                     </div>
                                     <span class="status-badge status-<?= $deposito['status'] ?>">
                                         <?= ucfirst($deposito['status']) ?>
@@ -695,12 +695,12 @@ try {
                         <?php foreach ($ultimos_saques as $saque): ?>
                             <div class="activity-item">
                                 <div class="activity-info">
-                                    <h4><?= htmlspecialchars($saque['nome'] ?? 'Usuário #' . $saque['usuario_id']) ?></h4>
-                                    <p><?= date('d/m/Y H:i', strtotime($saque['data_solicitacao'])) ?></p>
+                                    <h4><?= htmlspecialchars($saque['name'] ?? 'Usuário #' . $saque['user_id']) ?></h4>
+                                    <p><?= date('d/m/Y H:i', strtotime($saque['created_at'])) ?></p>
                                 </div>
                                 <div style="text-align: right;">
                                     <div class="activity-value" style="color: var(--error-color);">
-                                        R$ <?= number_format($saque['valor'], 2, ',', '.') ?>
+                                        R$ <?= number_format($saque['amount'], 2, ',', '.') ?>
                                     </div>
                                     <span class="status-badge status-<?= $saque['status'] ?>">
                                         <?= ucfirst($saque['status']) ?>
@@ -728,15 +728,15 @@ try {
                         <?php foreach ($ultimos_usuarios as $usuario): ?>
                             <div class="activity-item">
                                 <div class="activity-info">
-                                    <h4><?= htmlspecialchars($usuario['nome']) ?></h4>
+                                    <h4><?= htmlspecialchars($usuario['name']) ?></h4>
                                     <p><?= htmlspecialchars($usuario['email']) ?></p>
                                 </div>
                                 <div style="text-align: right;">
                                     <div class="activity-value" style="color: var(--primary-green);">
-                                        R$ <?= number_format($usuario['saldo'], 2, ',', '.') ?>
+                                        R$ <?= number_format($usuario['balance'], 2, ',', '.') ?>
                                     </div>
                                     <p style="font-size: 11px; color: var(--text-muted);">
-                                        <?= date('d/m/Y', strtotime($usuario['data_cadastro'])) ?>
+                                        <?= date('d/m/Y', strtotime($usuario['created_at'])) ?>
                                     </p>
                                 </div>
                             </div>
