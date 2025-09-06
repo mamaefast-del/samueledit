@@ -13,37 +13,103 @@ function getStats($pdo) {
     $stats = [];
     
     try {
+        // Criar tabelas se não existirem
+        $pdo->exec("CREATE TABLE IF NOT EXISTS usuarios (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            nome VARCHAR(255) NOT NULL,
+            email VARCHAR(255) UNIQUE NOT NULL,
+            senha VARCHAR(255) NOT NULL,
+            saldo DECIMAL(10,2) DEFAULT 0.00,
+            data_cadastro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            ultimo_login TIMESTAMP NULL,
+            status ENUM('ativo', 'inativo', 'banido') DEFAULT 'ativo'
+        )");
+        
+        $pdo->exec("CREATE TABLE IF NOT EXISTS depositos (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            usuario_id INT NOT NULL,
+            valor DECIMAL(10,2) NOT NULL,
+            metodo VARCHAR(50) DEFAULT 'PIX',
+            status ENUM('pendente', 'aprovado', 'rejeitado') DEFAULT 'pendente',
+            comprovante TEXT,
+            data_solicitacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            data_processamento TIMESTAMP NULL,
+            observacoes TEXT,
+            FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+        )");
+        
+        $pdo->exec("CREATE TABLE IF NOT EXISTS apostas (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            usuario_id INT NOT NULL,
+            jogo_id INT NOT NULL,
+            valor DECIMAL(10,2) NOT NULL,
+            multiplicador DECIMAL(8,2) DEFAULT 1.00,
+            ganho DECIMAL(10,2) DEFAULT 0.00,
+            status ENUM('pendente', 'ganhou', 'perdeu') DEFAULT 'pendente',
+            data_aposta TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (usuario_id) REFERENCES usuarios(id),
+            FOREIGN KEY (jogo_id) REFERENCES jogos(id)
+        )");
+        
+        $pdo->exec("CREATE TABLE IF NOT EXISTS jogos (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            nome VARCHAR(255) NOT NULL,
+            descricao TEXT,
+            imagem VARCHAR(500),
+            categoria VARCHAR(100),
+            provider VARCHAR(100),
+            status ENUM('ativo', 'inativo') DEFAULT 'ativo',
+            popularidade INT DEFAULT 0,
+            data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )");
+        
         // Total de usuários
-        $stmt = $pdo->query("SELECT COUNT(*) as total FROM usuarios WHERE status != 'banido'");
-        $stats['total_usuarios'] = $stmt->fetch()['total'] ?? 0;
+        $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM usuarios WHERE status != 'banido'");
+        $stmt->execute();
+        $result = $stmt->fetch();
+        $stats['total_usuarios'] = $result ? $result['total'] : 0;
         
         // Novos usuários nos últimos 30 dias
-        $stmt = $pdo->query("SELECT COUNT(*) as novos FROM usuarios WHERE data_cadastro >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND status != 'banido'");
-        $stats['novos_usuarios'] = $stmt->fetch()['novos'] ?? 0;
+        $stmt = $pdo->prepare("SELECT COUNT(*) as novos FROM usuarios WHERE data_cadastro >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND status != 'banido'");
+        $stmt->execute();
+        $result = $stmt->fetch();
+        $stats['novos_usuarios'] = $result ? $result['novos'] : 0;
         
         // Total de depósitos
-        $stmt = $pdo->query("SELECT COUNT(*) as total FROM depositos WHERE status = 'aprovado'");
-        $stats['total_depositos'] = $stmt->fetch()['total'] ?? 0;
+        $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM depositos WHERE status = 'aprovado'");
+        $stmt->execute();
+        $result = $stmt->fetch();
+        $stats['total_depositos'] = $result ? $result['total'] : 0;
         
         // Valor total depositado
-        $stmt = $pdo->query("SELECT SUM(valor) as total FROM depositos WHERE status = 'aprovado'");
-        $stats['valor_depositos'] = $stmt->fetch()['total'] ?? 0;
+        $stmt = $pdo->prepare("SELECT COALESCE(SUM(valor), 0) as total FROM depositos WHERE status = 'aprovado'");
+        $stmt->execute();
+        $result = $stmt->fetch();
+        $stats['valor_depositos'] = $result ? $result['total'] : 0;
         
         // Total de apostas
-        $stmt = $pdo->query("SELECT COUNT(*) as total FROM apostas");
-        $stats['total_apostas'] = $stmt->fetch()['total'] ?? 0;
+        $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM apostas");
+        $stmt->execute();
+        $result = $stmt->fetch();
+        $stats['total_apostas'] = $result ? $result['total'] : 0;
         
         // Valor total apostado
-        $stmt = $pdo->query("SELECT SUM(valor) as total FROM apostas");
-        $stats['valor_apostas'] = $stmt->fetch()['total'] ?? 0;
+        $stmt = $pdo->prepare("SELECT COALESCE(SUM(valor), 0) as total FROM apostas");
+        $stmt->execute();
+        $result = $stmt->fetch();
+        $stats['valor_apostas'] = $result ? $result['total'] : 0;
         
         // Jogos ativos
-        $stmt = $pdo->query("SELECT COUNT(*) as total FROM jogos WHERE status = 'ativo'");
-        $stats['jogos_ativos'] = $stmt->fetch()['total'] ?? 0;
+        $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM jogos WHERE status = 'ativo'");
+        $stmt->execute();
+        $result = $stmt->fetch();
+        $stats['jogos_ativos'] = $result ? $result['total'] : 0;
         
         // Depósitos pendentes
-        $stmt = $pdo->query("SELECT COUNT(*) as total FROM depositos WHERE status = 'pendente'");
-        $stats['depositos_pendentes'] = $stmt->fetch()['total'] ?? 0;
+        $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM depositos WHERE status = 'pendente'");
+        $stmt->execute();
+        $result = $stmt->fetch();
+        $stats['depositos_pendentes'] = $result ? $result['total'] : 0;
         
     } catch (PDOException $e) {
         error_log("Erro ao buscar estatísticas: " . $e->getMessage());
@@ -110,21 +176,38 @@ $usuariosRecentes = getUsuariosRecentes($pdo);
 
 // Inserir alguns jogos de exemplo se não existirem
 try {
-    $stmt = $pdo->query("SELECT COUNT(*) FROM jogos");
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM jogos");
+    $stmt->execute();
     $totalJogos = $stmt->fetchColumn();
     
     if ($totalJogos == 0) {
         $jogosExemplo = [
-            ['Aviator', 'Jogo do aviãozinho', 'https://via.placeholder.com/300x200?text=Aviator', 'Crash', 'Spribe'],
-            ['Mines', 'Encontre os diamantes', 'https://via.placeholder.com/300x200?text=Mines', 'Mines', 'Spribe'],
-            ['Plinko', 'Jogo da bolinha', 'https://via.placeholder.com/300x200?text=Plinko', 'Arcade', 'Spribe'],
-            ['Dice', 'Jogo de dados', 'https://via.placeholder.com/300x200?text=Dice', 'Dice', 'Spribe'],
-            ['Blackjack', 'Jogo de cartas clássico', 'https://via.placeholder.com/300x200?text=Blackjack', 'Cards', 'Evolution']
+            ['Aviator', 'Jogo do aviãozinho', 'https://via.placeholder.com/300x200?text=Aviator', 'Crash', 'Spribe', 50],
+            ['Mines', 'Encontre os diamantes', 'https://via.placeholder.com/300x200?text=Mines', 'Mines', 'Spribe', 40],
+            ['Plinko', 'Jogo da bolinha', 'https://via.placeholder.com/300x200?text=Plinko', 'Arcade', 'Spribe', 30],
+            ['Dice', 'Jogo de dados', 'https://via.placeholder.com/300x200?text=Dice', 'Dice', 'Spribe', 20],
+            ['Blackjack', 'Jogo de cartas clássico', 'https://via.placeholder.com/300x200?text=Blackjack', 'Cards', 'Evolution', 10]
         ];
         
         $stmt = $pdo->prepare("INSERT INTO jogos (nome, descricao, imagem, categoria, provider, popularidade) VALUES (?, ?, ?, ?, ?, ?)");
-        foreach ($jogosExemplo as $index => $jogo) {
-            $stmt->execute([$jogo[0], $jogo[1], $jogo[2], $jogo[3], $jogo[4], (5 - $index) * 10]);
+        foreach ($jogosExemplo as $jogo) {
+            $stmt->execute([$jogo[0], $jogo[1], $jogo[2], $jogo[3], $jogo[4], $jogo[5]]);
+        }
+        
+        // Inserir alguns usuários de exemplo
+        $usuariosExemplo = [
+            ['João Silva', 'joao@email.com', password_hash('123456', PASSWORD_DEFAULT), 1500.00],
+            ['Maria Santos', 'maria@email.com', password_hash('123456', PASSWORD_DEFAULT), 2300.50],
+            ['Pedro Costa', 'pedro@email.com', password_hash('123456', PASSWORD_DEFAULT), 890.75]
+        ];
+        
+        $stmt = $pdo->prepare("INSERT INTO usuarios (nome, email, senha, saldo) VALUES (?, ?, ?, ?)");
+        foreach ($usuariosExemplo as $usuario) {
+            try {
+                $stmt->execute($usuario);
+            } catch (PDOException $e) {
+                // Ignora erro se usuário já existir
+            }
         }
     }
 } catch (PDOException $e) {
