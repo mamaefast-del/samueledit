@@ -3,6 +3,14 @@ session_start();
 
 if (!isset($_SESSION['admin']) || $_SESSION['admin'] !== true) {
     header('Location: login.php');
+    exit;
+}
+
+require 'db.php';
+
+// Processar requisições AJAX
+if (isset($_GET['action']) && $_GET['action'] === 'get_stats') {
+    header('Content-Type: application/json');
     
     try {
         // Criar tabelas se não existirem
@@ -19,7 +27,6 @@ if (!isset($_SESSION['admin']) || $_SESSION['admin'] !== true) {
             id INT AUTO_INCREMENT PRIMARY KEY,
             nome VARCHAR(100) NOT NULL,
             categoria VARCHAR(50),
-            imagem VARCHAR(255),
             ativo BOOLEAN DEFAULT TRUE,
             data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )");
@@ -46,81 +53,49 @@ if (!isset($_SESSION['admin']) || $_SESSION['admin'] !== true) {
         )");
         
         // Inserir dados de exemplo se não existirem
-        $stmt = $pdo->query("SELECT COUNT(*) FROM usuarios");
-        if ($stmt->fetchColumn() == 0) {
+        $count_usuarios = $pdo->query("SELECT COUNT(*) FROM usuarios")->fetchColumn();
+        if ($count_usuarios == 0) {
             $pdo->exec("INSERT INTO usuarios (nome, email, senha, saldo) VALUES 
                 ('João Silva', 'joao@email.com', '" . password_hash('123456', PASSWORD_DEFAULT) . "', 150.00),
                 ('Maria Santos', 'maria@email.com', '" . password_hash('123456', PASSWORD_DEFAULT) . "', 200.00),
                 ('Pedro Costa', 'pedro@email.com', '" . password_hash('123456', PASSWORD_DEFAULT) . "', 75.50)");
         }
         
-        $stmt = $pdo->query("SELECT COUNT(*) FROM jogos");
-        if ($stmt->fetchColumn() == 0) {
-            $pdo->exec("INSERT INTO jogos (nome, categoria, imagem) VALUES 
-                ('Fortune Tiger', 'Slots', 'https://via.placeholder.com/150x150/FFD700/000000?text=🐅'),
-                ('Aviator', 'Crash', 'https://via.placeholder.com/150x150/00CED1/000000?text=✈️'),
-                ('Mines', 'Estratégia', 'https://via.placeholder.com/150x150/FF6347/000000?text=💣'),
-                ('Blackjack', 'Cartas', 'https://via.placeholder.com/150x150/2E8B57/000000?text=🃏'),
-                ('Roleta', 'Mesa', 'https://via.placeholder.com/150x150/DC143C/000000?text=🎰')");
+        $count_jogos = $pdo->query("SELECT COUNT(*) FROM jogos")->fetchColumn();
+        if ($count_jogos == 0) {
+            $pdo->exec("INSERT INTO jogos (nome, categoria, ativo) VALUES 
+                ('Aviator', 'Crash', 1),
+                ('Mines', 'Estratégia', 1),
+                ('Plinko', 'Arcade', 1),
+                ('Dice', 'Clássico', 1),
+                ('Blackjack', 'Cartas', 1)");
         }
         
         // Buscar estatísticas
-        $stats = [];
+        $total_usuarios = $pdo->query("SELECT COUNT(*) FROM usuarios")->fetchColumn();
+        $novos_usuarios = $pdo->query("SELECT COUNT(*) FROM usuarios WHERE data_cadastro >= DATE_SUB(NOW(), INTERVAL 30 DAY)")->fetchColumn();
+        $total_depositos = $pdo->query("SELECT COALESCE(SUM(valor), 0) FROM depositos WHERE status = 'aprovado'")->fetchColumn();
+        $depositos_pendentes = $pdo->query("SELECT COUNT(*) FROM depositos WHERE status = 'pendente'")->fetchColumn();
+        $total_apostas = $pdo->query("SELECT COALESCE(SUM(valor), 0) FROM apostas")->fetchColumn();
+        $apostas_hoje = $pdo->query("SELECT COUNT(*) FROM apostas WHERE DATE(data_aposta) = CURDATE()")->fetchColumn();
         
-        // Total de usuários
-        $stmt = $pdo->query("SELECT COUNT(*) FROM usuarios");
-        $stats['total_usuarios'] = $stmt->fetchColumn();
-        
-        // Novos usuários (últimos 30 dias)
-        $stmt = $pdo->query("SELECT COUNT(*) FROM usuarios WHERE data_cadastro >= DATE_SUB(NOW(), INTERVAL 30 DAY)");
-        $stats['novos_usuarios'] = $stmt->fetchColumn();
-        
-        // Total de depósitos aprovados
-        $stmt = $pdo->query("SELECT COALESCE(SUM(valor), 0) FROM depositos WHERE status = 'aprovado'");
-        $stats['total_depositos'] = $stmt->fetchColumn();
-        
-        // Depósitos pendentes
-        $stmt = $pdo->query("SELECT COUNT(*) FROM depositos WHERE status = 'pendente'");
-        $stats['depositos_pendentes'] = $stmt->fetchColumn();
-        
-        // Total de apostas
-        $stmt = $pdo->query("SELECT COUNT(*) FROM apostas");
-        $stats['total_apostas'] = $stmt->fetchColumn();
-        
-        // Apostas hoje
-        $stmt = $pdo->query("SELECT COUNT(*) FROM apostas WHERE DATE(data_aposta) = CURDATE()");
-        $stats['apostas_hoje'] = $stmt->fetchColumn();
-        
-        // Top jogos
-        $stmt = $pdo->query("
-            SELECT j.nome, j.categoria, j.imagem, COUNT(a.id) as total_apostas
-            FROM jogos j 
-            LEFT JOIN apostas a ON j.id = a.jogo_id 
-            WHERE j.ativo = 1
-            GROUP BY j.id 
-            ORDER BY total_apostas DESC 
-            LIMIT 5
-        ");
-        $stats['top_jogos'] = $stmt->fetchAll();
-        
-        // Usuários recentes
-        $stmt = $pdo->query("
-            SELECT nome, email, saldo, data_cadastro 
-            FROM usuarios 
-            ORDER BY data_cadastro DESC 
-            LIMIT 5
-        ");
-        $stats['usuarios_recentes'] = $stmt->fetchAll();
+        $stats = [
+            'total_usuarios' => (int)$total_usuarios,
+            'novos_usuarios' => (int)$novos_usuarios,
+            'total_depositos' => (float)$total_depositos,
+            'depositos_pendentes' => (int)$depositos_pendentes,
+            'total_apostas' => (float)$total_apostas,
+            'apostas_hoje' => (int)$apostas_hoje
+        ];
         
         echo json_encode($stats);
         
     } catch (Exception $e) {
-        echo json_encode(['error' => 'Erro ao buscar estatísticas: ' . $e->getMessage()]);
+        echo json_encode(['error' => $e->getMessage()]);
     }
+    
     exit;
 }
-
-require 'db.php';
 
 // Buscar estatísticas gerais
 try {
@@ -1560,8 +1535,29 @@ $icones_jogos = ['🎯', '🎲', '🎰', '🎪', '🎭', '🎨', '🎸', '⚽'];
         // Atualizar estatísticas do header
         async function updateHeaderStats() {
             try {
-                const response = await fetch('get_header_stats.php');
-                const data = await response.json();
+                const response = await fetch(window.location.pathname + '?action=get_stats');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const text = await response.text();
+                if (!text) {
+                    throw new Error('Empty response');
+                }
+                
+                let data;
+                try {
+                    data = JSON.parse(text);
+                } catch (parseError) {
+                    console.error('JSON Parse Error:', parseError);
+                    console.error('Response text:', text);
+                    throw new Error('Invalid JSON response');
+                }
+                
+                if (data.error) {
+                    throw new Error(data.error);
+                }
                 
                 document.getElementById('online-count').textContent = data.online || 0;
                 document.getElementById('deposito-count').textContent = data.depositos_pendentes || 0;
@@ -1569,6 +1565,10 @@ $icones_jogos = ['🎯', '🎲', '🎰', '🎪', '🎭', '🎨', '🎸', '⚽'];
                 document.getElementById('last-update').textContent = new Date().toLocaleTimeString('pt-BR');
             } catch (error) {
                 console.error('Erro ao atualizar estatísticas:', error);
+                // Mostrar valores padrão em caso de erro
+                document.getElementById('online-count').textContent = '0';
+                document.getElementById('deposito-count').textContent = '0';
+                document.getElementById('saque-count').textContent = '0';
             }
         }
 
